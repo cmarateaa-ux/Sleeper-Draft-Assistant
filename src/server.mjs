@@ -21,7 +21,7 @@ async function json(base, path = "") {
 const sleeper = path => json(API, path);
 async function players() { if (!playersCache || Date.now()-playersAt > 86400000) { playersCache = await sleeper("/players/nfl"); playersAt = Date.now(); } return playersCache; }
 async function season() { if (!seasonCache || Date.now()-seasonAt > 3600000) { seasonCache = await json(SEASON, "?season_type=regular"); seasonAt = Date.now(); } return seasonCache; }
-async function market() { if (!marketCache || Date.now()-marketAt > 600000) { marketCache = await json(WEEK1, "?season_type=regular"); marketAt = Date.now(); } return marketCache; }
+async function market() { if (!marketCache || Date.now()-marketAt > 600000) { marketCache = await json(WEEK1, "?season_type=regular"); marketCache = marketCache; marketAt = Date.now(); } return marketCache; }
 async function ffc(scoring, teams) {
   const key = `${scoring}:${teams}`; const cached = ffcCache.get(key);
   if (cached && Date.now()-cached.at < 1800000) return cached.data;
@@ -37,7 +37,7 @@ function survival(adp, pick) { if(!Number.isFinite(adp)||!pick) return null; ret
 function projection(seasonRow, marketRow, scoring) {
   const a=stats(seasonRow), b=stats(marketRow);
   const pts=scoring==="ppr"?(a.pts_ppr??seasonRow?.pts_ppr):scoring==="half_ppr"?(a.pts_half_ppr??seasonRow?.pts_half_ppr):(a.pts_std??seasonRow?.pts_std);
-  const adp=scoring==="ppr"?(b.adp_dd_ppr??b.adp_ppr??a.adp_dd_ppr??a.adp_ppr??marketRow?.adp_dd_ppr??seasonRow?.adp_dd_ppr):scoring==="half_ppr"?(b.adp_dd_half_ppr??b.adp_half_ppr??a.adp_dd_half_ppr??a.adp_half_ppr??marketRow?.adp_dd_half_ppr??seasonRow?.adp_dd_half_ppr):(b.adp_dd_std??b.adp_std??a.adp_dd_std??a.adp_std??marketRow?.adp_dd_std??seasonRow?.adp_std);
+  const adp=scoring==="ppr"?(b.adp_dd_ppr??b.adp_ppr??a.adp_dd_ppr??a.adp_ppr??marketRow?.adp_dd_ppr??seasonRow?.adp_dd_ppr):scoring==="half_ppr"?(b.adp_dd_half_ppr??b.adp_half_ppr??a.adp_dd_half_ppr??a.adp_half_ppr??marketRow?.adp_dd_half_ppr??seasonRow?.adp_dd_half_ppr):(b.adp_dd_std??b.adp_std??a.adp_dd_std??a.adp_std??marketRow?.adp_dd_std??seasonRow?.adp_dd_std);
   const n=Number(adp); return { points:Number.isFinite(Number(pts))?Number(pts):0, sleeperAdp:Number.isFinite(n)&&n>0&&n<200?n:null };
 }
 
@@ -59,7 +59,8 @@ async function recommend(draftId) {
     const pl=pmap[id]; if(!pl||drafted.has(id))return null;
     const pos=pl.position||(Array.isArray(pl.fantasy_positions)?pl.fantasy_positions[0]:""); if(!["QB","RB","WR","TE"].includes(pos))return null;
     const v=projection(s,mmap.get(id),scoring), full=[pl.first_name,pl.last_name].filter(Boolean).join(" "), f=ffcByName.get(nameKey(full)), fa=Number(f?.adp);
-    const adp=Number.isFinite(fa)&&fa>0&&fa<200?fa:v.sleeperAdp; if(!adp&&!v.points)return null;
+    // Sleeper is the primary market source. FFC is fallback data only when Sleeper has no ADP.
+    const adp=v.sleeperAdp ?? (Number.isFinite(fa)&&fa>0&&fa<200?fa:null); if(!adp&&!v.points)return null;
     return {id,name:full,position:pos,team:pl.team??"",adp,points:v.points};
   }).filter(Boolean);
   const round=userPick?Math.ceil(userPick/teams):1, window=userPick?userPick+Math.max(24,teams*2):teams*2;
@@ -78,5 +79,5 @@ async function recommend(draftId) {
   return {scoringType:scoring,teams,currentPickNo:current,currentSlot:slot(current,teams,type),userSlot,userPickNo:userPick,nextUserPick,picksUntilUser:userPick?userPick-current:null,availableCount:available,roster,recommendation:best?{name:best.name,position:best.position,team:best.team,adp:best.adp,points:best.points,confidence,nextPick:nextUserPick,survivalPct:best.survivalPct,reason:`ADP ${best.adp?.toFixed(1)??"—"} · projected ${best.points.toFixed(1)} pts · market tier, projection value and your next pick considered.`,plan}:null,alternatives:candidates.slice(1,5).map(x=>({name:x.name,position:x.position,team:x.team,adp:x.adp,points:x.points,survivalPct:x.survivalPct})),nextTurnTargets,nextPickDistance:userPick&&nextUserPick?nextUserPick-userPick:null};
 }
 async function proxy(pathname,res){try{const data=await sleeper(pathname);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}));}}
-const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url??"/",`http://${req.headers.host??"localhost"}`);if(u.pathname==="/"||u.pathname==="/index.html"){const html=await readFile(path.join(root,"../public/index.html"));res.writeHead(200,{"content-type":"text/html; charset=utf-8","cache-control":"no-store"});res.end(html);return;}if(u.pathname==="/api/health"){res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:true,build:"draft-strategy-2026-08-31-10"}));return;}const m=u.pathname.match(/^\/api\/recommendations\/(\d+)$/);if(m){const data=await recommend(m[1]);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));return;}if(u.pathname.startsWith("/api/sleeper/")){await proxy(u.pathname.slice("/api/sleeper".length),res);return;}res.writeHead(404);res.end("Not found");}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}));}});
+const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url??"/",`http://${req.headers.host??"localhost"}`);if(u.pathname==="/"||u.pathname==="/index.html"){const html=await readFile(path.join(root,"../public/index.html"));res.writeHead(200,{"content-type":"text/html; charset=utf-8","cache-control":"no-store"});res.end(html);return;}if(u.pathname==="/api/health"){res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:true,build:"sleeper-market-primary-2026-08-31-11"}));return;}const m=u.pathname.match(/^\/api\/recommendations\/(\d+)$/);if(m){const data=await recommend(m[1]);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));return;}if(u.pathname.startsWith("/api/sleeper/")){await proxy(u.pathname.slice("/api/sleeper".length),res);return;}res.writeHead(404);res.end("Not found");}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}));}});
 server.listen(port,"0.0.0.0",()=>console.log(`Sleeper Draft Assistant: http://localhost:${port}`));
