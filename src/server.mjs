@@ -8,21 +8,22 @@ const port=Number(process.env.PORT??3000);
 const sleeperBase="https://api.sleeper.app/v1";
 const sleeperProjectionBase="https://api.sleeper.com/projections/nfl";
 const sleeperAdpCache=new Map();
-const BUILD="sleeper-adp-reconciliation-2026-08-31-25";
+const BUILD="sleeper-adp-reconciliation-2026-08-31-26";
 
 async function sleeper(pathname){const r=await fetch(`${sleeperBase}${pathname}`,{headers:{"user-agent":"Mozilla/5.0 Sleeper-Draft-Assistant/0.1"}});if(!r.ok)throw new Error(`Sleeper returned ${r.status} · ${await r.text()}`);return r.json()}
 function nextFor(pickNo,teams,userSlot,type){if(!userSlot)return null;for(let p=pickNo;p<=teams*100;p++){const round=Math.ceil(p/teams),within=((p-1)%teams)+1,sl=type==="linear"?within:(round%2===1?within:teams-within+1);if(sl===userSlot)return p}return null}
 function slot(pickNo,teams,type){const within=((pickNo-1)%teams)+1,round=Math.ceil(pickNo/teams);return type==="linear"?within:(round%2===1?within:teams-within+1)}
+function fieldName(scoring){return scoring.includes("half")?"adp_half_ppr":scoring.includes("standard")||scoring.includes("std")?"adp_std":"adp_ppr"}
 async function sleeperAdp(scoring,year){
-  // These are Sleeper's scoring-specific published ADP fields. The previous
-  // implementation used adp_dd_ppr, which is a different Sleeper field and
-  // does not match the ADP displayed on the normal PPR draft board.
-  const field=scoring.includes("half")?"adp_half_ppr":scoring.includes("standard")||scoring.includes("std")?"adp_std":"adp_ppr";
+  // Sleeper's scoring-specific ADP lives on the season projection feed.
+  // The prior code incorrectly queried week 1 and used adp_dd_ppr, which is a
+  // different field. The normal PPR draft board uses adp_ppr.
+  const field=fieldName(scoring);
   const cacheKey=`sleeper-feed-${field}-${year}`;
   const cached=sleeperAdpCache.get(cacheKey);
   if(cached&&Date.now()-cached.at<30*60*1000)return cached.data;
   try{
-    const r=await fetch(`${sleeperProjectionBase}/${year}/1?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=${field}`,{headers:{"user-agent":"Mozilla/5.0 Sleeper-Draft-Assistant/0.1","accept":"application/json"}});
+    const r=await fetch(`${sleeperProjectionBase}/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=${field}`,{headers:{"user-agent":"Mozilla/5.0 Sleeper-Draft-Assistant/0.1","accept":"application/json"}});
     if(!r.ok)throw new Error(`Sleeper projections returned ${r.status}`);
     const rows=await r.json(),map=new Map();
     for(const p of Array.isArray(rows)?rows:[]){const id=String(p.player_id??p.stats?.player_id??""),rawAdp=Number(p[field]??p.stats?.[field]);if(id&&Number.isFinite(rawAdp)&&rawAdp>0&&rawAdp<999)map.set(id,rawAdp)}
@@ -39,8 +40,6 @@ const candidates=raw.map(x=>{
   const flexNeed=(x.position==="RB"||x.position==="WR")&&round<=8&&roster.RB+roster.WR<needs.RB+needs.WR+2?4:0;
   const qbDepthPenalty=x.position==="QB"&&roster.QB>=needs.QB?-22:0,teDepthPenalty=x.position==="TE"&&roster.TE>=needs.TE?-10:0;
   const adpVsPick=userPick?userPick-x.adp:0;
-  // Scoring-specific Sleeper ADP is the market signal. Keep its influence
-  // bounded so ADP alone cannot overwhelm roster construction.
   const marketValue=userPick?Math.max(0,Math.min(82,50+adpVsPick*1.35)):Math.max(0,100-x.adp*0.65);
   const reachPenalty=userPick?Math.max(0,-adpVsPick-8)*2.25:0;
   const score=marketValue+startingNeed+flexNeed+qbDepthPenalty+teDepthPenalty-reachPenalty;
@@ -50,8 +49,7 @@ const best=candidates[0]??null,runner=candidates[1]?.score??(best?best.score-8:0
 const nextTurnTargets=nextUserPick?[...candidates].filter(x=>x.id!==best?.id).sort((a,b)=>Math.abs(a.adp-nextUserPick)-Math.abs(b.adp-nextUserPick)).slice(0,4).map(x=>({name:x.name,position:x.position,team:x.team,adp:x.adp,survivalPct:x.adp<=nextUserPick?100:Math.max(0,Math.min(100,Math.round(100-(x.adp-nextUserPick)*9)))})):[];
 let plan="Take the best market value that improves the roster; reassess the board after the next turn.";if(best&&nextUserPick){const back=nextTurnTargets.filter(x=>x.survivalPct>=60).slice(0,2).map(x=>x.name).join(" or ");plan=back?`Take ${best.name} now. At pick ${nextUserPick}, ${back} has a reasonable market chance to remain.`:`Take ${best.name} now. At pick ${nextUserPick}, take the best remaining player rather than forcing a position.`}
 const available=raw.length,recentPicks=picks.slice(-8).reverse().map(p=>({pickNo:p.pick_no,name:[p.metadata?.first_name,p.metadata?.last_name].filter(Boolean).join(" "),position:p.metadata?.position??"",playerId:p.player_id}));
-const adpLabel=adpMap.size?`Sleeper ${scoring.toUpperCase()} ADP` : "unavailable";
+const adpLabel=adpMap.size?`Sleeper ${scoring.toUpperCase()} ADP`:"unavailable";
 return{build:BUILD,scoringType:scoring,teams,draftStatus:draft.status,currentPickNo:current,currentSlot:slot(current,teams,type),userSlot,userPickNo:userPick,nextUserPick,picksUntilUser:userPick?userPick-current:null,availableCount:available,roster,recentPicks,marketSource:adpLabel,adpSource:fieldName(scoring),recommendation:best?{name:best.name,position:best.position,team:best.team,adp:best.adp,points:null,confidence,nextPick:nextUserPick,survivalPct:nextUserPick?(best.adp<=nextUserPick?100:Math.max(0,Math.min(100,Math.round(100-(best.adp-nextUserPick)*9)))):null,reason:`Sleeper ${scoring.toUpperCase()} ADP ${best.adp.toFixed(1)} · pick ${userPick??"—"} · ${best.adpVsPick>=0?`about ${Math.round(best.adpVsPick)} spots later than this pick`:`about ${Math.round(Math.abs(best.adpVsPick))} spots earlier than this pick`}. ${best.starterNeed>0?`Fills an immediate ${best.position} starting need.`:"Roster priority and pick value both considered."}`,plan}:null,alternatives:candidates.slice(1,5).map(x=>({name:x.name,position:x.position,team:x.team,adp:x.adp,points:null,survivalPct:nextUserPick?(x.adp<=nextUserPick?100:Math.max(0,Math.min(100,Math.round(100-(x.adp-nextUserPick)*9)))):null,adpVsPick:userPick?userPick-x.adp:null})),nextTurnTargets,nextPickDistance:userPick&&nextUserPick?nextUserPick-userPick:null}}
-function fieldName(scoring){return scoring.includes("half")?"adp_half_ppr":scoring.includes("standard")||scoring.includes("std")?"adp_std":"adp_ppr"}
 async function proxy(pathname,res){try{const data=await sleeper(pathname);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data))}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}))}}
 const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url??"/",`http://${req.headers.host??"localhost"}`);if(u.pathname==="/"||u.pathname==="/index.html"){const html=await readFile(path.join(root,"../public/index.html"));res.writeHead(200,{"content-type":"text/html; charset=utf-8","cache-control":"no-store"});res.end(html);return}if(u.pathname==="/api/health"){res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:true,build:BUILD}));return}const m=u.pathname.match(/^\/api\/recommendations\/(\d+)$/);if(m){const data=await recommend(m[1]);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));return}if(u.pathname.startsWith("/api/sleeper/")){await proxy(u.pathname.slice("/api/sleeper".length),res);return}res.writeHead(404);res.end("Not found")}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}))}});server.listen(port,"0.0.0.0",()=>console.log(`Sleeper Draft Assistant: http://localhost:${port}`));
