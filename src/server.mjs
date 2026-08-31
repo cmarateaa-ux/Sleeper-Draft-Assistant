@@ -8,7 +8,7 @@ const port=Number(process.env.PORT??3000);
 const sleeperBase="https://api.sleeper.app/v1";
 const sleeperProjectionBase="https://api.sleeper.com/projections/nfl";
 const sleeperMarketCache=new Map(),playersCache={data:null,at:0,promise:null},draftCache=new Map(),recommendationCache=new Map();
-const BUILD="sleeper-live-refresh-2026-08-31-37";
+const BUILD="sleeper-live-refresh-2026-08-31-38";
 
 async function sleeper(pathname){const r=await fetch(`${sleeperBase}${pathname}`,{headers:{"user-agent":"Mozilla/5.0 Sleeper-Draft-Assistant/0.1"}});if(!r.ok)throw new Error(`Sleeper returned ${r.status} · ${await r.text()}`);return r.json()}
 async function nflPlayers(){const now=Date.now();if(playersCache.data&&now-playersCache.at<30*60*1000)return playersCache.data;if(playersCache.promise)return playersCache.promise;playersCache.promise=sleeper("/players/nfl").then(data=>{playersCache.data=data;playersCache.at=Date.now();playersCache.promise=null;return data}).catch(e=>{playersCache.promise=null;throw e});return playersCache.promise}
