@@ -1,14 +1,41 @@
 {
   "name": "sleeper-draft-assistant",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
-    "dev": "node src/server.mjs",
+    "dev": "node src/def-market-guard.mjs",
     "check": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test",
+    "desktop": "electron .",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.cmarateaa.sleeperdraftassistant",
+    "productName": "Sleeper Draft Assistant",
+    "files": [
+      "electron/**/*",
+      "public/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "artifactName": "Sleeper-Draft-Assistant-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true
+    }
   },
   "devDependencies": {
+    "electron": "^38.1.0",
+    "electron-builder": "^26.0.12",
     "typescript": "^5.9.2"
   }
 }
