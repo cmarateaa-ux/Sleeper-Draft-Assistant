@@ -67,14 +67,17 @@ async function recommend(draftId){
   const needs={QB:Number(draft.settings?.slots_qb??1),RB:Number(draft.settings?.slots_rb??2),WR:Number(draft.settings?.slots_wr??2),TE:Number(draft.settings?.slots_te??1)};
   const adpMap=await ffcAdp(scoring,teams,draft.season??new Date().getFullYear());
   const raw=Object.entries(players).map(([id,pl])=>{
-    if(!pl||drafted.has(id)||pl.status!=="Active")return null;
+    // A draft recommendation should only contain active players who are currently
+    // attached to an NFL team. This removes retired/unsigned free agents such as
+    // Julian Edelman and Antonio Brown from both recommendations and alternatives.
+    if(!pl||drafted.has(id)||pl.status!=="Active"||!pl.team)return null;
     const pos=pl.position||(Array.isArray(pl.fantasy_positions)?pl.fantasy_positions[0]:"");
     if(!["QB","RB","WR","TE"].includes(pos))return null;
     const name=[pl.first_name,pl.last_name].filter(Boolean).join(" ");
     if(!name)return null;
     const adp=adpMap.get(keyName(name));
     if(adp==null)return null;
-    return {id,name,position:pos,team:pl.team??"",adp,points:null};
+    return {id,name,position:pos,team:String(pl.team),adp,points:null};
   }).filter(Boolean);
   const round=userPick?Math.ceil(userPick/teams):1;
   const tier=raw.filter(x=>!userPick||x.adp<=userPick+30);
@@ -98,10 +101,10 @@ async function recommend(draftId){
     const back=nextTurnTargets.filter(x=>(x.survivalPct??0)>=60).slice(0,2).map(x=>x.name).join(" or ");
     plan=back?`Take ${best.name} now. At pick ${nextUserPick}, ${back} has a reasonable market chance to remain.`:`Take ${best.name} now. At pick ${nextUserPick}, take the best remaining player rather than forcing a position.`;
   }
-  const available=Object.keys(players).filter(id=>!drafted.has(id)&&players[id]?.status==="Active"&&["QB","RB","WR","TE"].includes(players[id]?.position||"")).length;
+  const available=Object.keys(players).filter(id=>!drafted.has(id)&&players[id]?.status==="Active"&&players[id]?.team&&["QB","RB","WR","TE"].includes(players[id]?.position||"")).length;
   const recentPicks=picks.slice(-8).reverse().map(p=>({pickNo:p.pick_no,name:[p.metadata?.first_name,p.metadata?.last_name].filter(Boolean).join(" "),position:p.metadata?.position??"",playerId:p.player_id}));
   return {scoringType:scoring,teams,draftStatus:draft.status,currentPickNo:current,currentSlot:slot(current,teams,type),userSlot,userPickNo:userPick,nextUserPick,picksUntilUser:userPick?userPick-current:null,availableCount:available,roster,recentPicks,marketSource:adpMap.size?"Fantasy Football Calculator ADP":"unavailable",recommendation:best?{name:best.name,position:best.position,team:best.team,adp:best.adp,points:null,confidence,nextPick:nextUserPick,survivalPct:best.adp<=nextUserPick?100:Math.max(0,Math.min(100,Math.round(100-(best.adp-nextUserPick)*9))),reason:`ADP ${best.adp.toFixed(1)} · roster priority and pick value considered. Projection data is not being faked when unavailable.`,plan}:null,alternatives:candidates.slice(1,5).map(x=>({name:x.name,position:x.position,team:x.team,adp:x.adp,points:null,survivalPct:x.adp<=nextUserPick?100:Math.max(0,Math.min(100,Math.round(100-(x.adp-nextUserPick)*9)))})),nextTurnTargets,nextPickDistance:userPick&&nextUserPick?nextUserPick-userPick:null};
 }
 async function proxy(pathname,res){try{const data=await sleeper(pathname);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}));}}
-const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url??"/",`http://${req.headers.host??"localhost"}`);if(u.pathname==="/"||u.pathname==="/index.html"){const html=await readFile(path.join(root,"../public/index.html"));res.writeHead(200,{"content-type":"text/html; charset=utf-8","cache-control":"no-store"});res.end(html);return;}if(u.pathname==="/api/health"){res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:true,build:"sleeper-market-roster-2026-08-31-15"}));return;}const m=u.pathname.match(/^\/api\/recommendations\/(\d+)$/);if(m){const data=await recommend(m[1]);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));return;}if(u.pathname.startsWith("/api/sleeper/")){await proxy(u.pathname.slice("/api/sleeper".length),res);return;}res.writeHead(404);res.end("Not found");}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}));}});
+const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url??"/",`http://${req.headers.host??"localhost"}`);if(u.pathname==="/"||u.pathname==="/index.html"){const html=await readFile(path.join(root,"../public/index.html"));res.writeHead(200,{"content-type":"text/html; charset=utf-8","cache-control":"no-store"});res.end(html);return;}if(u.pathname==="/api/health"){res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:true,build:"sleeper-eligibility-2026-08-31-16"}));return;}const m=u.pathname.match(/^\/api\/recommendations\/(\d+)$/);if(m){const data=await recommend(m[1]);res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));return;}if(u.pathname.startsWith("/api/sleeper/")){await proxy(u.pathname.slice("/api/sleeper".length),res);return;}res.writeHead(404);res.end("Not found");}catch(e){res.writeHead(502,{"content-type":"application/json"});res.end(JSON.stringify({error:e instanceof Error?e.message:String(e)}));}});
 server.listen(port,"0.0.0.0",()=>console.log(`Sleeper Draft Assistant: http://localhost:${port}`));
