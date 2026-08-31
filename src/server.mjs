@@ -118,23 +118,20 @@ async function buildRecommendation(draftId) {
     return { id, name: fullName, position: pos, team: player.team ?? "", adp, sleeperAdp: market.sleeperAdp, points: market.points };
   }).filter(Boolean);
 
-  // Draft recommendations must live in a credible market tier. Projection data can be noisy,
-  // so it cannot promote a player with an ADP hundreds of picks later into the top tier.
-  const projectionRank = new Map([...rawCandidates].sort((a, b) => b.points - a.points).map((p, i) => [p.id, i + 1]));
+  // Market ADP defines the initial draft tier. Projection data can move a player within
+  // that tier, but a wildly later ADP must never jump into the early-round recommendations.
   const round = userPickNo ? Math.ceil(userPickNo / teams) : 1;
-  const adpWindow = userPickNo ? userPickNo + Math.max(18, Math.round(teams * 1.5)) : teams * 2;
-  const tierCandidates = rawCandidates.filter((player) => {
-    if (player.adp == null) return projectionRank.get(player.id) <= 20;
-    return player.adp <= adpWindow || projectionRank.get(player.id) <= 12;
-  });
+  const adpWindow = userPickNo ? userPickNo + Math.max(24, teams * 2) : teams * 2;
+  const tierCandidates = rawCandidates.filter((player) => player.adp == null ? player.points > 0 : player.adp <= adpWindow);
+  const projectionSorted = [...tierCandidates].sort((a, b) => b.points - a.points);
+  const projectionRank = new Map(projectionSorted.map((player, index) => [player.id, index + 1]));
 
   const candidates = tierCandidates.map((player) => {
-    const adp = player.adp ?? adpWindow + 20;
-    const rank = projectionRank.get(player.id) ?? rawCandidates.length;
+    const adp = player.adp ?? adpWindow;
+    const rank = projectionRank.get(player.id) ?? tierCandidates.length;
     const marketScore = player.adp == null ? 0 : Math.max(0, 100 - adp * 1.55);
     const projectionScore = Math.max(0, 38 - Math.min(38, (rank - 1) * 1.15));
     const need = Math.max(0, (needs[player.position] ?? 0) - (userCounts[player.position] ?? 0));
-    // Early rounds are about elite value first; roster need becomes more important later.
     const needBonus = round <= 3 ? Math.min(2, need) : Math.min(9, need * 3);
     const fallBonus = userPickNo && player.adp != null ? Math.max(0, Math.min(10, player.adp - userPickNo) * 0.35) : 0;
     const reachPenalty = userPickNo && player.adp != null ? Math.max(0, userPickNo - player.adp - 5) * 2.5 : 0;
@@ -158,7 +155,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     if (url.pathname === "/" || url.pathname === "/index.html") { const html = await readFile(path.join(root, "../public/index.html")); res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(html); return; }
-    if (url.pathname === "/api/health") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ ok: true, build: "market-tier-engine-2026-08-31-8" })); return; }
+    if (url.pathname === "/api/health") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ ok: true, build: "market-tier-engine-2026-08-31-9" })); return; }
     const rec = url.pathname.match(/^\/api\/recommendations\/(\d+)$/);
     if (rec) { const data = await buildRecommendation(rec[1]); res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); return; }
     if (url.pathname.startsWith("/api/sleeper/")) { await proxySleeper(url.pathname.slice("/api/sleeper".length), res); return; }
