@@ -9,7 +9,7 @@
     "check": "tsc --noEmit",
     "test": "node --test",
     "desktop": "electron .",
-    "dist:win": "electron-builder --win nsis"
+    "dist:win": "electron-builder --win nsis --publish never"
   },
   "build": {
     "appId": "com.cmarateaa.sleeperdraftassistant",
