@@ -48,13 +48,22 @@ function asRows(value) {
   if (value && typeof value === "object") return Object.entries(value);
   return [];
 }
+function statsOf(row) {
+  return row?.stats && typeof row.stats === "object" ? row.stats : row ?? {};
+}
 function projectionValue(seasonRow, marketRow, scoring) {
-  const points = scoring === "ppr" ? seasonRow?.pts_ppr : scoring === "half_ppr" ? seasonRow?.pts_half_ppr : seasonRow?.pts_std;
-  const adp = scoring === "ppr"
-    ? (marketRow?.adp_dd_ppr ?? marketRow?.adp_ppr ?? seasonRow?.adp_dd_ppr ?? seasonRow?.adp_ppr)
+  const seasonStats = statsOf(seasonRow);
+  const marketStats = statsOf(marketRow);
+  const points = scoring === "ppr"
+    ? (seasonStats.pts_ppr ?? seasonRow?.pts_ppr)
     : scoring === "half_ppr"
-      ? (marketRow?.adp_dd_half_ppr ?? marketRow?.adp_half_ppr ?? seasonRow?.adp_dd_half_ppr ?? seasonRow?.adp_half_ppr)
-      : (marketRow?.adp_dd_std ?? marketRow?.adp_std ?? seasonRow?.adp_dd_std ?? seasonRow?.adp_std);
+      ? (seasonStats.pts_half_ppr ?? seasonRow?.pts_half_ppr)
+      : (seasonStats.pts_std ?? seasonRow?.pts_std);
+  const adp = scoring === "ppr"
+    ? (marketStats.adp_dd_ppr ?? marketStats.adp_ppr ?? seasonStats.adp_dd_ppr ?? seasonStats.adp_ppr ?? marketRow?.adp_dd_ppr ?? seasonRow?.adp_dd_ppr)
+    : scoring === "half_ppr"
+      ? (marketStats.adp_dd_half_ppr ?? marketStats.adp_half_ppr ?? seasonStats.adp_dd_half_ppr ?? seasonStats.adp_half_ppr ?? marketRow?.adp_dd_half_ppr ?? seasonRow?.adp_dd_half_ppr)
+      : (marketStats.adp_dd_std ?? marketStats.adp_std ?? seasonStats.adp_dd_std ?? seasonStats.adp_std ?? marketRow?.adp_dd_std ?? seasonRow?.adp_dd_std);
   return {
     points: Number.isFinite(Number(points)) ? Number(points) : 0,
     adp: Number.isFinite(Number(adp)) && Number(adp) > 0 && Number(adp) < 999 ? Number(adp) : null,
@@ -136,7 +145,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     if (url.pathname === "/" || url.pathname === "/index.html") { const html = await readFile(path.join(root, "../public/index.html")); res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(html); return; }
-    if (url.pathname === "/api/health") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ ok: true, build: "live-recommendations-2026-08-31-5" })); return; }
+    if (url.pathname === "/api/health") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ ok: true, build: "live-recommendations-2026-08-31-6" })); return; }
     const rec = url.pathname.match(/^\/api\/recommendations\/(\d+)$/);
     if (rec) { const data = await buildRecommendation(rec[1]); res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); return; }
     if (url.pathname.startsWith("/api/sleeper/")) { await proxySleeper(url.pathname.slice("/api/sleeper".length), res); return; }
