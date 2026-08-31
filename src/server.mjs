@@ -83,6 +83,7 @@ function nextPickForSlot(currentPick, teams, userSlot, type = "snake") {
   for (let p = currentPick; p < currentPick + teams * 2; p += 1) if (slotForPick(p, teams, type) === userSlot) return p;
   return null;
 }
+
 async function buildRecommendation(draftId) {
   const draft = await sleeper(`/draft/${encodeURIComponent(draftId)}`);
   const picks = await sleeper(`/draft/${encodeURIComponent(draftId)}/picks`);
@@ -103,8 +104,7 @@ async function buildRecommendation(draftId) {
   const userCounts = { QB: 0, RB: 0, WR: 0, TE: 0 };
   for (const pick of userPicked) { const pos = pick.metadata?.position; if (pos && Object.hasOwn(userCounts, pos)) userCounts[pos] += 1; }
   const needs = { QB: Number(draft.settings?.slots_qb ?? 1), RB: Number(draft.settings?.slots_rb ?? 2), WR: Number(draft.settings?.slots_wr ?? 2), TE: Number(draft.settings?.slots_te ?? 1) };
-
-  const candidates = Array.from(seasonRows.entries()).map(([id, seasonRow]) => {
+  const rawCandidates = Array.from(seasonRows.entries()).map(([id, seasonRow]) => {
     const player = players[id];
     if (!player || drafted.has(id)) return null;
     const pos = player.position || (Array.isArray(player.fantasy_positions) ? player.fantasy_positions[0] : "");
@@ -115,22 +115,41 @@ async function buildRecommendation(draftId) {
     const ffcAdp = Number(ffc?.adp);
     const adp = Number.isFinite(ffcAdp) && ffcAdp > 0 && ffcAdp < 200 ? ffcAdp : market.sleeperAdp;
     if (!adp && !market.points) return null;
-    const pointsScore = Math.min(55, market.points / 6);
-    const marketValue = adp ? Math.max(0, 125 - adp) : 0;
-    const needBonus = Math.max(0, (needs[pos] ?? 0) - (userCounts[pos] ?? 0)) * 2.5;
-    const fallValue = userPickNo && adp ? Math.max(0, adp - userPickNo) * 0.8 : 0;
-    const reachPenalty = userPickNo && adp ? Math.max(0, userPickNo - adp - 5) * 2 : 0;
-    const score = marketValue + pointsScore + needBonus + fallValue - reachPenalty;
-    return { id, name: fullName, position: pos, team: player.team ?? "", adp, sleeperAdp: market.sleeperAdp, points: market.points, score };
-  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 5);
+    return { id, name: fullName, position: pos, team: player.team ?? "", adp, sleeperAdp: market.sleeperAdp, points: market.points };
+  }).filter(Boolean);
+
+  // Draft recommendations must live in a credible market tier. Projection data can be noisy,
+  // so it cannot promote a player with an ADP hundreds of picks later into the top tier.
+  const projectionRank = new Map([...rawCandidates].sort((a, b) => b.points - a.points).map((p, i) => [p.id, i + 1]));
+  const round = userPickNo ? Math.ceil(userPickNo / teams) : 1;
+  const adpWindow = userPickNo ? userPickNo + Math.max(18, Math.round(teams * 1.5)) : teams * 2;
+  const tierCandidates = rawCandidates.filter((player) => {
+    if (player.adp == null) return projectionRank.get(player.id) <= 20;
+    return player.adp <= adpWindow || projectionRank.get(player.id) <= 12;
+  });
+
+  const candidates = tierCandidates.map((player) => {
+    const adp = player.adp ?? adpWindow + 20;
+    const rank = projectionRank.get(player.id) ?? rawCandidates.length;
+    const marketScore = player.adp == null ? 0 : Math.max(0, 100 - adp * 1.55);
+    const projectionScore = Math.max(0, 38 - Math.min(38, (rank - 1) * 1.15));
+    const need = Math.max(0, (needs[player.position] ?? 0) - (userCounts[player.position] ?? 0));
+    // Early rounds are about elite value first; roster need becomes more important later.
+    const needBonus = round <= 3 ? Math.min(2, need) : Math.min(9, need * 3);
+    const fallBonus = userPickNo && player.adp != null ? Math.max(0, Math.min(10, player.adp - userPickNo) * 0.35) : 0;
+    const reachPenalty = userPickNo && player.adp != null ? Math.max(0, userPickNo - player.adp - 5) * 2.5 : 0;
+    const score = marketScore * 0.64 + projectionScore * 0.28 + needBonus + fallBonus - reachPenalty;
+    return { ...player, projectionRank: rank, score };
+  }).sort((a, b) => b.score - a.score).slice(0, 5);
 
   const best = candidates[0] ?? null;
   const runnerUp = candidates[1]?.score ?? (best ? best.score - 8 : 0);
   const availableCount = Object.keys(players).filter((id) => !drafted.has(id) && players[id] && ["QB", "RB", "WR", "TE"].includes(players[id].position || "")).length;
+  const confidence = best ? Math.round(Math.min(88, Math.max(55, 58 + Math.max(0, best.score - runnerUp) * 1.5))) : null;
   return {
     scoringType, teams, currentPickNo, currentSlot, userSlot, userPickNo, picksUntilUser: userPickNo ? userPickNo - currentPickNo : null,
     availableCount, roster: userCounts,
-    recommendation: best ? { name: best.name, position: best.position, team: best.team, adp: best.adp, points: best.points, confidence: Math.round(Math.min(95, Math.max(55, 68 + (best.score - runnerUp) * 1.5))), reason: `ADP ${best.adp.toFixed(1)} · projected ${best.points.toFixed(1)} pts · value, roster construction and your next pick considered.` } : null,
+    recommendation: best ? { name: best.name, position: best.position, team: best.team, adp: best.adp, points: best.points, confidence, reason: `ADP ${best.adp?.toFixed(1) ?? "—"} · projected ${best.points.toFixed(1)} pts · market tier, projection value, roster construction and your next pick considered.` } : null,
     alternatives: candidates.slice(1, 4).map((c) => ({ name: c.name, position: c.position, team: c.team, adp: c.adp, points: c.points })),
   };
 }
@@ -139,7 +158,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     if (url.pathname === "/" || url.pathname === "/index.html") { const html = await readFile(path.join(root, "../public/index.html")); res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(html); return; }
-    if (url.pathname === "/api/health") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ ok: true, build: "live-recommendations-2026-08-31-7" })); return; }
+    if (url.pathname === "/api/health") { res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ ok: true, build: "market-tier-engine-2026-08-31-8" })); return; }
     const rec = url.pathname.match(/^\/api\/recommendations\/(\d+)$/);
     if (rec) { const data = await buildRecommendation(rec[1]); res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); return; }
     if (url.pathname.startsWith("/api/sleeper/")) { await proxySleeper(url.pathname.slice("/api/sleeper".length), res); return; }
