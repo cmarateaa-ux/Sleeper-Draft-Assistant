@@ -20,7 +20,7 @@
 </section></main>
 <script>
 const $=id=>document.getElementById(id);
-const BUILD='sleeper-live-refresh-2026-08-31-35';
+const BUILD='sleeper-live-refresh-2026-08-31-37';
 let draftIdValue=null,timer=null,stateBusy=false,recBusy=false,lastPickCount=-1,lastClockPick=-1,lastState=null,cachedRecommendation=null,recToken=0;
 function parseDraftId(input){const x=input.trim();if(/^\d{10,}$/.test(x))return x;try{const u=new URL(x),parts=u.pathname.split('/').filter(Boolean),i=parts.findIndex(p=>p.toLowerCase()==='draft'),c=i>=0?(parts[i+2]??parts[i+1]):null;if(/^\d{10,}$/.test(c??''))return c}catch{}const m=x.match(/(?:^|\/)draft\/(?:nfl\/)?(\d{10,})(?:[/?#]|$)/i);if(m?.[1])return m[1];throw Error('Enter a Sleeper draft URL or draft ID.')}
 async function api(path){const r=await fetch(path+'?v='+Date.now(),{cache:'no-store'});const t=await r.text();let d;try{d=JSON.parse(t)}catch{throw Error(t)}if(!r.ok)throw Error(d.error||'Request failed');return d}
