@@ -23,11 +23,21 @@ export async function loadDraftState(draftId: string): Promise<DraftState> {
 
 export function parseDraftUrl(input: string): string {
   const trimmed = input.trim();
-  const direct = trimmed.match(/^\d{10,}$/);
-  if (direct?.[0]) return direct[0];
-  const match = trimmed.match(/draft\/([^/?#]+)/i);
+  if (/^\d{10,}$/.test(trimmed)) return trimmed;
+  try {
+    const url = new URL(trimmed);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const draftIndex = parts.findIndex((part) => part.toLowerCase() === "draft");
+    if (draftIndex >= 0) {
+      const candidate = parts[draftIndex + 2] ?? parts[draftIndex + 1];
+      if (candidate && /^\d{10,}$/.test(candidate)) return candidate;
+    }
+  } catch {
+    // Fall through to the simple path matcher below.
+  }
+  const match = trimmed.match(/(?:^|\/)draft\/(?:nfl\/)?(\d{10,})(?:[/?#]|$)/i);
   if (match?.[1]) return match[1];
-  throw new Error("Enter a Sleeper draft ID or a Sleeper draft URL.");
+  throw new Error("Enter a Sleeper draft URL or draft ID.");
 }
 
 export function picksSince(previous: SleeperPick[], current: SleeperPick[]): SleeperPick[] {
