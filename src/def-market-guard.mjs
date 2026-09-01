@@ -1,7 +1,25 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 const nativeFetch = globalThis.fetch.bind(globalThis);
+const root = path.dirname(fileURLToPath(import.meta.url));
+const logDir = path.join(root, "..", "draft-logs");
+const logPath = path.join(logDir, "live-telemetry.jsonl");
+const BUILD = "sleeper-live-refresh-2026-08-31-41";
+const AUTO_DRAFT_SLOTS = [4];
 let playerDefCache = null;
 let activePlayersCache = null;
 let activePlayersPromise = null;
+
+function writeTelemetry(record) {
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(logPath, `${JSON.stringify({ ts: new Date().toISOString(), build: BUILD, ...record })}\n`, "utf8");
+  } catch (error) {
+    console.warn("Draft telemetry write failed:", error?.message || error);
+  }
+}
 
 async function getDefensePlayers() {
   if (playerDefCache) return playerDefCache;
@@ -50,10 +68,6 @@ function installDefenseMarketGuard() {
   globalThis.fetch = async (input, init) => {
     const url = String(input?.url ?? input ?? "");
 
-    // Sleeper documents /players/nfl as a large (~5 MB) bootstrap endpoint and
-    // recommends filtered position/active requests instead. Build the same
-    // player map from six small parallel requests so recommendation startup
-    // does not spend tens of seconds downloading the full player database.
     if (url === "https://api.sleeper.app/v1/players/nfl") {
       const players = await getActivePlayers();
       return new Response(JSON.stringify(players), {
@@ -62,7 +76,50 @@ function installDefenseMarketGuard() {
       });
     }
 
+    const started = Date.now();
     const response = await nativeFetch(input, init);
+
+    if (url.includes("/draft/") && (url.endsWith("/picks") || url.match(/\/draft\/[^/]+$/))) {
+      try {
+        const body = await response.clone().json();
+        const match = url.match(/\/draft\/([^/?]+)/);
+        const draftId = match?.[1] ?? null;
+        const isPicks = url.endsWith("/picks");
+        const picks = isPicks && Array.isArray(body) ? body : null;
+        const lastPick = picks?.length ? picks[picks.length - 1] : null;
+        writeTelemetry({
+          type: isPicks ? "draft_picks_snapshot" : "draft_metadata",
+          draftId,
+          latencyMs: Date.now() - started,
+          pickCount: picks?.length ?? null,
+          lastPick: lastPick ? {
+            pickNo: Number(lastPick.pick_no) || null,
+            draftSlot: Number(lastPick.draft_slot) || null,
+            playerId: lastPick.player_id ?? null,
+            position: lastPick.metadata?.position ?? null,
+          } : null,
+          autoDraftSlots: AUTO_DRAFT_SLOTS,
+          autoDraftLastPick: lastPick ? AUTO_DRAFT_SLOTS.includes(Number(lastPick.draft_slot)) : false,
+          picks: picks?.map((p) => ({
+            pickNo: Number(p.pick_no) || null,
+            draftSlot: Number(p.draft_slot) || null,
+            playerId: p.player_id ?? null,
+            position: p.metadata?.position ?? null,
+          })) ?? null,
+          metadata: !isPicks ? {
+            status: body?.status ?? null,
+            teams: body?.settings?.teams ?? null,
+            type: body?.type ?? null,
+            season: body?.season ?? null,
+            scoringType: body?.metadata?.scoring_type ?? null,
+            draftOrder: body?.draft_order ?? null,
+          } : null,
+        });
+      } catch (error) {
+        writeTelemetry({ type: "draft_telemetry_error", url, error: error?.message || String(error) });
+      }
+    }
+
     if (!url.includes("api.sleeper.com/projections/nfl")) return response;
 
     try {
